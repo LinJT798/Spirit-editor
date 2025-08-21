@@ -15,6 +15,7 @@ class SpriteInfo:
     width: int
     height: int
     image: Optional[Image.Image] = None
+    selected: bool = False
 
 
 class SpriteCutter:
@@ -170,6 +171,126 @@ class SpriteCutter:
                     trimmed_sprites.append(new_sprite)
         
         return trimmed_sprites
+    
+    def export_selected_sprites(self, output_dir: str, format: str = 'png', 
+                                trim: bool = False, mode: str = 'individual',
+                                atlas_padding: int = 2, atlas_name: str = 'atlas',
+                                name_prefix: str = 'sprite_') -> Dict[str, any]:
+        selected_sprites = [s for s in self.sprites if s.selected]
+        if not selected_sprites:
+            raise ValueError("No sprites selected for export")
+        
+        os.makedirs(output_dir, exist_ok=True)
+        
+        sprites_to_export = self.trim_sprites(selected_sprites) if trim else selected_sprites
+        
+        if mode == 'individual':
+            return self._export_individual_sprites(sprites_to_export, output_dir, format, name_prefix)
+        elif mode == 'atlas':
+            return self._export_atlas(sprites_to_export, output_dir, format, atlas_padding, atlas_name)
+        else:
+            raise ValueError(f"Unknown export mode: {mode}")
+    
+    def _export_individual_sprites(self, sprites: List[SpriteInfo], output_dir: str, 
+                                  format: str, name_prefix: str = 'sprite_') -> Dict[str, any]:
+        metadata = {
+            'export_mode': 'individual',
+            'sprite_count': len(sprites),
+            'sprites': []
+        }
+        
+        for sprite in sprites:
+            if sprite.image:
+                file_name = f"{sprite.name}.{format}"
+                file_path = os.path.join(output_dir, file_name)
+                sprite.image.save(file_path, format.upper())
+                
+                sprite_meta = {
+                    'name': sprite.name,
+                    'file': file_name,
+                    'width': sprite.width,
+                    'height': sprite.height
+                }
+                metadata['sprites'].append(sprite_meta)
+        
+        metadata_path = os.path.join(output_dir, 'sprites_metadata.json')
+        with open(metadata_path, 'w', encoding='utf-8') as f:
+            json.dump(metadata, f, indent=2)
+        
+        return metadata
+    
+    def _export_atlas(self, sprites: List[SpriteInfo], output_dir: str, 
+                     format: str, padding: int, atlas_name: str = 'atlas') -> Dict[str, any]:
+        if not sprites:
+            raise ValueError("No sprites to pack")
+        
+        positions = self._pack_sprites(sprites, padding)
+        
+        atlas_width = int(max(p['x'] + p['width'] for p in positions))
+        atlas_height = int(max(p['y'] + p['height'] for p in positions))
+        
+        atlas_image = Image.new('RGBA', (atlas_width, atlas_height), (0, 0, 0, 0))
+        
+        metadata = {
+            'export_mode': 'atlas',
+            'atlas_size': {'width': int(atlas_width), 'height': int(atlas_height)},
+            'sprite_count': len(sprites),
+            'sprites': []
+        }
+        
+        for sprite, pos in zip(sprites, positions):
+            if sprite.image:
+                atlas_image.paste(sprite.image, (pos['x'], pos['y']))
+                
+                sprite_meta = {
+                    'name': sprite.name,
+                    'frame': {
+                        'x': int(pos['x']),
+                        'y': int(pos['y']),
+                        'width': int(pos['width']),
+                        'height': int(pos['height'])
+                    }
+                }
+                metadata['sprites'].append(sprite_meta)
+        
+        atlas_path = os.path.join(output_dir, f'{atlas_name}.{format}')
+        atlas_image.save(atlas_path, format.upper())
+        
+        metadata_path = os.path.join(output_dir, f'{atlas_name}.json')
+        with open(metadata_path, 'w', encoding='utf-8') as f:
+            json.dump(metadata, f, indent=2)
+        
+        return metadata
+    
+    def _pack_sprites(self, sprites: List[SpriteInfo], padding: int) -> List[Dict]:
+        sorted_sprites = sorted(sprites, key=lambda s: s.height * s.width, reverse=True)
+        
+        positions = []
+        current_x = 0
+        current_y = 0
+        row_height = 0
+        max_width = 2048
+        
+        for sprite in sorted_sprites:
+            width = sprite.width + padding
+            height = sprite.height + padding
+            
+            if current_x + width > max_width:
+                current_x = 0
+                current_y += row_height
+                row_height = 0
+            
+            positions.append({
+                'x': current_x,
+                'y': current_y,
+                'width': sprite.width,
+                'height': sprite.height
+            })
+            
+            current_x += width
+            row_height = max(row_height, height)
+        
+        return positions
     
     def export_sprites(self, output_dir: str, format: str = 'png', 
                        trim: bool = False) -> Dict[str, any]:

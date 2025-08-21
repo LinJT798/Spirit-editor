@@ -22,6 +22,8 @@ class SpriteSheetGUI:
         self.current_selection = None
         self.selection_start = None
         self.preview_labels = []
+        self.sprite_rectangles = {}
+        self.selected_count = 0
         
         self.setup_ui()
         
@@ -38,11 +40,39 @@ class SpriteSheetGUI:
         main_frame = tk.Frame(self.root)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        left_panel = tk.Frame(main_frame, width=300)
+        left_panel = tk.Frame(main_frame, width=320)
         left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
         left_panel.pack_propagate(False)
         
-        self.setup_control_panel(left_panel)
+        # 添加滚动条到左侧面板
+        left_canvas = Canvas(left_panel, width=300)
+        left_scrollbar = Scrollbar(left_panel, orient="vertical", command=left_canvas.yview)
+        scrollable_frame = tk.Frame(left_canvas)
+        
+        # 创建窗口并设置宽度
+        canvas_window = left_canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        
+        def configure_scroll_region(event=None):
+            # 更新滚动区域
+            left_canvas.configure(scrollregion=left_canvas.bbox("all"))
+            # 设置frame宽度匹配canvas
+            left_canvas.itemconfig(canvas_window, width=left_canvas.winfo_width())
+        
+        scrollable_frame.bind("<Configure>", configure_scroll_region)
+        left_canvas.bind("<Configure>", lambda e: left_canvas.itemconfig(canvas_window, width=e.width))
+        
+        left_canvas.configure(yscrollcommand=left_scrollbar.set)
+        
+        # 添加鼠标滚轮支持
+        def on_mousewheel(event):
+            left_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        
+        left_canvas.bind_all("<MouseWheel>", on_mousewheel)
+        
+        left_scrollbar.pack(side="right", fill="y")
+        left_canvas.pack(side="left", fill="both", expand=True)
+        
+        self.setup_control_panel(scrollable_frame)
         
         right_panel = tk.Frame(main_frame)
         right_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -123,12 +153,50 @@ class SpriteSheetGUI:
         
         ttk.Separator(parent, orient='horizontal').pack(fill=tk.X, pady=10)
         
+        tk.Label(parent, text="精灵选择", font=("Arial", 12, "bold")).pack(pady=5)
+        
+        selection_frame = tk.Frame(parent)
+        selection_frame.pack(fill=tk.X, pady=5)
+        
+        # 使用ttk.Button避免macOS按钮显示问题
+        ttk.Button(selection_frame, text="全选", command=self.select_all_sprites).pack(side=tk.LEFT, padx=2)
+        ttk.Button(selection_frame, text="取消全选", command=self.deselect_all_sprites).pack(side=tk.LEFT, padx=2)
+        ttk.Button(selection_frame, text="反选", command=self.invert_selection).pack(side=tk.LEFT, padx=2)
+        
+        self.selection_info_label = tk.Label(parent, text="未选择精灵", fg='gray')
+        self.selection_info_label.pack(pady=5)
+        
+        ttk.Separator(parent, orient='horizontal').pack(fill=tk.X, pady=10)
+        
         tk.Label(parent, text="导出选项", font=("Arial", 12, "bold")).pack(pady=5)
         
+        self.export_mode = tk.StringVar(value="individual")
+        tk.Radiobutton(parent, text="单图导出", variable=self.export_mode,
+                      value="individual", command=self.on_export_mode_change).pack(anchor=tk.W, padx=20)
+        tk.Radiobutton(parent, text="图集导出", variable=self.export_mode,
+                      value="atlas", command=self.on_export_mode_change).pack(anchor=tk.W, padx=20)
+        
+        # 通用导出参数
         self.trim_var = tk.BooleanVar(value=True)
         tk.Checkbutton(parent, text="去除透明边缘", variable=self.trim_var).pack(anchor=tk.W, padx=20)
         
-        export_btn = tk.Button(parent, text="导出精灵", command=self.export_sprites,
+        # 导出格式选择
+        format_frame = tk.Frame(parent)
+        format_frame.pack(fill=tk.X, pady=2, padx=20)
+        tk.Label(format_frame, text="导出格式:").pack(side=tk.LEFT)
+        self.export_format_var = tk.StringVar(value="png")
+        format_menu = ttk.Combobox(format_frame, textvariable=self.export_format_var, 
+                                   values=["png", "jpg", "webp"], width=8, state="readonly")
+        format_menu.pack(side=tk.LEFT, padx=5)
+        
+        # 创建参数容器框架
+        self.export_params_frame = tk.Frame(parent)
+        self.export_params_frame.pack(fill=tk.X, pady=5, padx=20)
+        
+        # 初始化为单图导出参数
+        self.setup_individual_export_params()
+        
+        export_btn = tk.Button(parent, text="导出选中精灵", command=self.export_selected_sprites,
                              bg='#FF9800', fg='white', padx=20, pady=5)
         export_btn.pack(pady=5)
         
@@ -301,10 +369,18 @@ class SpriteSheetGUI:
             self.display_image_on_canvas()
     
     def on_canvas_click(self, event):
+        canvas_x = self.canvas.canvasx(event.x)
+        canvas_y = self.canvas.canvasy(event.y)
+        
+        if self.sprites and self.cut_mode.get() != "manual":
+            clicked_sprite = self.find_sprite_at_position(canvas_x, canvas_y)
+            if clicked_sprite:
+                clicked_sprite.selected = not clicked_sprite.selected
+                self.update_selection_count()
+                self.redraw_canvas()
+                return
+        
         if self.cut_mode.get() == "manual" and self.current_image:
-            canvas_x = self.canvas.canvasx(event.x)
-            canvas_y = self.canvas.canvasy(event.y)
-            
             self.selection_start = (canvas_x, canvas_y)
             
             if self.current_selection:
@@ -365,6 +441,7 @@ class SpriteSheetGUI:
     def redraw_canvas(self):
         self.canvas.delete("selection")
         self.canvas.delete("sprite_rect")
+        self.sprite_rectangles.clear()
         
         for x, y, w, h in self.manual_selections:
             self.canvas.create_rectangle(
@@ -374,12 +451,19 @@ class SpriteSheetGUI:
             )
         
         for sprite in self.sprites:
-            self.canvas.create_rectangle(
-                sprite.x * self.scale_factor, sprite.y * self.scale_factor,
-                (sprite.x + sprite.width) * self.scale_factor,
-                (sprite.y + sprite.height) * self.scale_factor,
-                outline='blue', width=1, tags="sprite_rect"
+            x1 = sprite.x * self.scale_factor
+            y1 = sprite.y * self.scale_factor
+            x2 = (sprite.x + sprite.width) * self.scale_factor
+            y2 = (sprite.y + sprite.height) * self.scale_factor
+            
+            color = 'red' if sprite.selected else 'blue'
+            width = 3 if sprite.selected else 1
+            
+            rect_id = self.canvas.create_rectangle(
+                x1, y1, x2, y2,
+                outline=color, width=width, tags="sprite_rect"
             )
+            self.sprite_rectangles[rect_id] = sprite
     
     def execute_cut(self):
         if not self.current_image:
@@ -417,6 +501,8 @@ class SpriteSheetGUI:
                 self.sprites = self.cutter.manual_cut(self.manual_selections)
             
             self.result_label.config(text=f"成功切割 {len(self.sprites)} 个精灵")
+            self.selected_count = 0
+            self.update_selection_count()
             self.redraw_canvas()
             self.show_preview()
             
@@ -465,6 +551,157 @@ class SpriteSheetGUI:
         for widget in self.preview_scroll.winfo_children():
             widget.destroy()
         self.preview_labels = []
+    
+    def on_export_mode_change(self):
+        mode = self.export_mode.get()
+        if mode == "individual":
+            self.setup_individual_export_params()
+        else:
+            self.setup_atlas_export_params()
+    
+    def setup_individual_export_params(self):
+        # 清除现有参数
+        for widget in self.export_params_frame.winfo_children():
+            widget.destroy()
+        
+        tk.Label(self.export_params_frame, text="单图导出参数:", font=("Arial", 10, "bold")).pack(anchor=tk.W)
+        
+        # 文件命名模式
+        naming_frame = tk.Frame(self.export_params_frame)
+        naming_frame.pack(fill=tk.X, pady=2)
+        tk.Label(naming_frame, text="命名前缀:").pack(side=tk.LEFT)
+        self.name_prefix_var = tk.StringVar(value="sprite_")
+        tk.Entry(naming_frame, textvariable=self.name_prefix_var, width=15).pack(side=tk.LEFT)
+    
+    def setup_atlas_export_params(self):
+        # 清除现有参数
+        for widget in self.export_params_frame.winfo_children():
+            widget.destroy()
+        
+        tk.Label(self.export_params_frame, text="图集导出参数:", font=("Arial", 10, "bold")).pack(anchor=tk.W)
+        
+        # 图集间距
+        padding_frame = tk.Frame(self.export_params_frame)
+        padding_frame.pack(fill=tk.X, pady=2)
+        tk.Label(padding_frame, text="精灵间距:").pack(side=tk.LEFT)
+        self.atlas_padding_var = tk.StringVar(value="2")
+        tk.Entry(padding_frame, textvariable=self.atlas_padding_var, width=5).pack(side=tk.LEFT)
+        tk.Label(padding_frame, text="像素").pack(side=tk.LEFT)
+        
+        # 最大图集尺寸
+        size_frame = tk.Frame(self.export_params_frame)
+        size_frame.pack(fill=tk.X, pady=2)
+        tk.Label(size_frame, text="最大宽度:").pack(side=tk.LEFT)
+        self.max_atlas_width_var = tk.StringVar(value="2048")
+        tk.Entry(size_frame, textvariable=self.max_atlas_width_var, width=8).pack(side=tk.LEFT)
+        tk.Label(size_frame, text="像素").pack(side=tk.LEFT)
+        
+        # 排列算法选择
+        algo_frame = tk.Frame(self.export_params_frame)
+        algo_frame.pack(fill=tk.X, pady=2)
+        tk.Label(algo_frame, text="排列方式:").pack(side=tk.LEFT)
+        self.pack_algorithm_var = tk.StringVar(value="row")
+        ttk.Combobox(algo_frame, textvariable=self.pack_algorithm_var,
+                    values=["row", "square", "tight"], width=10, state="readonly").pack(side=tk.LEFT)
+        
+        # 图集文件名
+        name_frame = tk.Frame(self.export_params_frame)
+        name_frame.pack(fill=tk.X, pady=2)
+        tk.Label(name_frame, text="图集名称:").pack(side=tk.LEFT)
+        self.atlas_name_var = tk.StringVar(value="atlas")
+        tk.Entry(name_frame, textvariable=self.atlas_name_var, width=15).pack(side=tk.LEFT)
+    
+    def find_sprite_at_position(self, x, y):
+        real_x = x / self.scale_factor
+        real_y = y / self.scale_factor
+        
+        for sprite in self.sprites:
+            if (sprite.x <= real_x <= sprite.x + sprite.width and 
+                sprite.y <= real_y <= sprite.y + sprite.height):
+                return sprite
+        return None
+    
+    def update_selection_count(self):
+        self.selected_count = sum(1 for s in self.sprites if s.selected)
+        if self.selected_count > 0:
+            self.selection_info_label.config(
+                text=f"已选择 {self.selected_count}/{len(self.sprites)} 个精灵",
+                fg='green'
+            )
+        else:
+            self.selection_info_label.config(text="未选择精灵", fg='gray')
+    
+    def select_all_sprites(self):
+        for sprite in self.sprites:
+            sprite.selected = True
+        self.update_selection_count()
+        self.redraw_canvas()
+    
+    def deselect_all_sprites(self):
+        for sprite in self.sprites:
+            sprite.selected = False
+        self.update_selection_count()
+        self.redraw_canvas()
+    
+    def invert_selection(self):
+        for sprite in self.sprites:
+            sprite.selected = not sprite.selected
+        self.update_selection_count()
+        self.redraw_canvas()
+    
+    def export_selected_sprites(self):
+        if not self.sprites:
+            messagebox.showwarning("警告", "没有可导出的精灵")
+            return
+        
+        selected_count = sum(1 for s in self.sprites if s.selected)
+        if selected_count == 0:
+            messagebox.showwarning("警告", "请先选择要导出的精灵")
+            return
+        
+        output_dir = filedialog.askdirectory(title="选择导出目录")
+        if not output_dir:
+            return
+        
+        try:
+            mode = self.export_mode.get()
+            format = self.export_format_var.get()
+            
+            # 获取导出参数
+            if mode == 'atlas':
+                if not hasattr(self, 'atlas_padding_var'):
+                    self.setup_atlas_export_params()
+                atlas_padding = int(self.atlas_padding_var.get())
+                atlas_name = self.atlas_name_var.get() if hasattr(self, 'atlas_name_var') else 'atlas'
+                name_prefix = 'sprite_'
+            else:
+                if not hasattr(self, 'name_prefix_var'):
+                    self.setup_individual_export_params()
+                atlas_padding = 2
+                atlas_name = 'atlas'
+                name_prefix = self.name_prefix_var.get() if hasattr(self, 'name_prefix_var') else 'sprite_'
+            
+            metadata = self.cutter.export_selected_sprites(
+                output_dir,
+                format=format,
+                trim=self.trim_var.get(),
+                mode=mode,
+                atlas_padding=atlas_padding,
+                atlas_name=atlas_name,
+                name_prefix=name_prefix
+            )
+            
+            if mode == 'individual':
+                messagebox.showinfo("成功", 
+                                  f"成功导出 {metadata['sprite_count']} 个精灵到:\n{output_dir}")
+            else:
+                atlas_size = metadata['atlas_size']
+                messagebox.showinfo("成功", 
+                                  f"成功导出图集 ({atlas_size['width']}x{atlas_size['height']}):\n"
+                                  f"包含 {metadata['sprite_count']} 个精灵\n"
+                                  f"保存到: {output_dir}")
+        except Exception as e:
+            messagebox.showerror("错误", f"导出失败: {str(e)}")
     
     def export_sprites(self):
         if not self.sprites:
