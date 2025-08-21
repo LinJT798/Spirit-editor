@@ -659,10 +659,6 @@ class SpriteSheetGUI:
             messagebox.showwarning("警告", "请先选择要导出的精灵")
             return
         
-        output_dir = filedialog.askdirectory(title="选择导出目录")
-        if not output_dir:
-            return
-        
         try:
             mode = self.export_mode.get()
             format = self.export_format_var.get()
@@ -674,12 +670,27 @@ class SpriteSheetGUI:
                 atlas_padding = int(self.atlas_padding_var.get())
                 atlas_name = self.atlas_name_var.get() if hasattr(self, 'atlas_name_var') else 'atlas'
                 name_prefix = 'sprite_'
+                export_name = atlas_name
             else:
                 if not hasattr(self, 'name_prefix_var'):
                     self.setup_individual_export_params()
                 atlas_padding = 2
                 atlas_name = 'atlas'
                 name_prefix = self.name_prefix_var.get() if hasattr(self, 'name_prefix_var') else 'sprite_'
+                export_name = name_prefix.rstrip('_')  # 移除末尾的下划线作为文件夹名
+            
+            # 创建输出目录：output/导出名称_时间戳
+            import time
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            folder_name = f"{export_name}_{timestamp}"
+            
+            # 获取项目根目录并创建output子文件夹
+            project_dir = os.path.dirname(os.path.abspath(__file__))
+            output_base = os.path.join(project_dir, 'output')
+            os.makedirs(output_base, exist_ok=True)
+            
+            output_dir = os.path.join(output_base, folder_name)
+            os.makedirs(output_dir, exist_ok=True)
             
             metadata = self.cutter.export_selected_sprites(
                 output_dir,
@@ -691,15 +702,28 @@ class SpriteSheetGUI:
                 name_prefix=name_prefix
             )
             
+            # 相对路径显示
+            relative_path = os.path.join('output', folder_name)
+            
             if mode == 'individual':
-                messagebox.showinfo("成功", 
-                                  f"成功导出 {metadata['sprite_count']} 个精灵到:\n{output_dir}")
+                messagebox.showinfo("导出成功", 
+                                  f"✅ 成功导出 {metadata['sprite_count']} 个精灵\n\n"
+                                  f"📁 保存位置: {relative_path}\n"
+                                  f"📊 统计信息:\n"
+                                  f"  • 图片数量: {metadata['statistics']['total_images']}\n"
+                                  f"  • 尺寸范围: {metadata['statistics']['min_width']}~{metadata['statistics']['max_width']} × "
+                                  f"{metadata['statistics']['min_height']}~{metadata['statistics']['max_height']}")
             else:
                 atlas_size = metadata['atlas_size']
-                messagebox.showinfo("成功", 
-                                  f"成功导出图集 ({atlas_size['width']}x{atlas_size['height']}):\n"
-                                  f"包含 {metadata['sprite_count']} 个精灵\n"
-                                  f"保存到: {output_dir}")
+                layout = metadata['layout_info']
+                messagebox.showinfo("导出成功", 
+                                  f"✅ 成功导出图集\n\n"
+                                  f"📁 保存位置: {relative_path}\n"
+                                  f"📊 图集信息:\n"
+                                  f"  • 图集尺寸: {atlas_size['width']}×{atlas_size['height']}\n"
+                                  f"  • 精灵数量: {metadata['sprite_count']}\n"
+                                  f"  • 估算布局: {layout['estimated_columns']}列 × {layout['estimated_rows']}行\n"
+                                  f"  • 精灵间距: {metadata['sprite_padding']}像素")
         except Exception as e:
             messagebox.showerror("错误", f"导出失败: {str(e)}")
     

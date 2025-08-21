@@ -193,29 +193,45 @@ class SpriteCutter:
     
     def _export_individual_sprites(self, sprites: List[SpriteInfo], output_dir: str, 
                                   format: str, name_prefix: str = 'sprite_') -> Dict[str, any]:
+        # 收集尺寸信息
+        sizes = [(s.width, s.height) for s in sprites if s.image]
+        
         metadata = {
             'export_mode': 'individual',
+            'export_type': '单图导出',
             'sprite_count': len(sprites),
+            'image_format': format.upper(),
+            'statistics': {
+                'total_images': len(sprites),
+                'min_width': min(w for w, h in sizes) if sizes else 0,
+                'max_width': max(w for w, h in sizes) if sizes else 0,
+                'min_height': min(h for w, h in sizes) if sizes else 0,
+                'max_height': max(h for w, h in sizes) if sizes else 0,
+                'average_width': sum(w for w, h in sizes) // len(sizes) if sizes else 0,
+                'average_height': sum(h for w, h in sizes) // len(sizes) if sizes else 0
+            },
             'sprites': []
         }
         
-        for sprite in sprites:
+        for i, sprite in enumerate(sprites):
             if sprite.image:
-                file_name = f"{sprite.name}.{format}"
+                file_name = f"{name_prefix}{i:03d}.{format}"
                 file_path = os.path.join(output_dir, file_name)
                 sprite.image.save(file_path, format.upper())
                 
                 sprite_meta = {
+                    'index': i,
                     'name': sprite.name,
                     'file': file_name,
                     'width': sprite.width,
-                    'height': sprite.height
+                    'height': sprite.height,
+                    'size': f"{sprite.width}x{sprite.height}"
                 }
                 metadata['sprites'].append(sprite_meta)
         
-        metadata_path = os.path.join(output_dir, 'sprites_metadata.json')
+        metadata_path = os.path.join(output_dir, 'metadata.json')
         with open(metadata_path, 'w', encoding='utf-8') as f:
-            json.dump(metadata, f, indent=2)
+            json.dump(metadata, f, indent=2, ensure_ascii=False)
         
         return metadata
     
@@ -229,12 +245,41 @@ class SpriteCutter:
         atlas_width = int(max(p['x'] + p['width'] for p in positions))
         atlas_height = int(max(p['y'] + p['height'] for p in positions))
         
+        # 计算行列数
+        sprite_widths = [s.width for s in sprites]
+        sprite_heights = [s.height for s in sprites]
+        avg_width = sum(sprite_widths) // len(sprite_widths) if sprite_widths else 0
+        avg_height = sum(sprite_heights) // len(sprite_heights) if sprite_heights else 0
+        
+        # 估算行列数（基于平均尺寸）
+        estimated_cols = atlas_width // (avg_width + padding) if avg_width > 0 else 1
+        estimated_rows = atlas_height // (avg_height + padding) if avg_height > 0 else 1
+        
         atlas_image = Image.new('RGBA', (atlas_width, atlas_height), (0, 0, 0, 0))
         
         metadata = {
             'export_mode': 'atlas',
-            'atlas_size': {'width': int(atlas_width), 'height': int(atlas_height)},
+            'export_type': '图集导出',
+            'atlas_name': atlas_name,
+            'atlas_file': f'{atlas_name}.{format}',
+            'image_format': format.upper(),
+            'atlas_size': {
+                'width': int(atlas_width), 
+                'height': int(atlas_height)
+            },
             'sprite_count': len(sprites),
+            'sprite_padding': padding,
+            'layout_info': {
+                'estimated_columns': estimated_cols,
+                'estimated_rows': estimated_rows,
+                'total_frames': len(sprites),
+                'average_sprite_width': avg_width,
+                'average_sprite_height': avg_height,
+                'min_sprite_width': min(sprite_widths) if sprite_widths else 0,
+                'max_sprite_width': max(sprite_widths) if sprite_widths else 0,
+                'min_sprite_height': min(sprite_heights) if sprite_heights else 0,
+                'max_sprite_height': max(sprite_heights) if sprite_heights else 0
+            },
             'sprites': []
         }
         
@@ -256,7 +301,7 @@ class SpriteCutter:
         atlas_path = os.path.join(output_dir, f'{atlas_name}.{format}')
         atlas_image.save(atlas_path, format.upper())
         
-        metadata_path = os.path.join(output_dir, f'{atlas_name}.json')
+        metadata_path = os.path.join(output_dir, 'metadata.json')
         with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2)
         

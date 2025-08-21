@@ -10,7 +10,9 @@
       "Bash(git remote add:*)",
       "Bash(git branch:*)",
       "Bash(git push:*)",
-      "Bash(pkill:*)"
+      "Bash(pkill:*)",
+      "Bash(mkdir:*)",
+      "Bash(./run.sh)"
     ],
     "deny": [],
     "ask": []
