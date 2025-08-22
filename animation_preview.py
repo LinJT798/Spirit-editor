@@ -53,6 +53,16 @@ class AnimationPreviewApp:
         self.frame_rate = 12
         self.last_frame_time = 0
         
+        # 参考图集相关
+        self.reference_atlas = None
+        self.reference_metadata = None
+        self.reference_sprites = []
+        self.selected_reference_sprite = None
+        self.show_reference = tk.BooleanVar(value=True)
+        
+        # 缩放相关
+        self.animation_scale = 1.0  # 动画精灵缩放比例
+        
         # UI元素
         self.scale_factor = 2.0  # 放大倍数
         
@@ -128,6 +138,30 @@ class AnimationPreviewApp:
                                command=self.on_scale_change)
         scale_slider.pack(fill=tk.X, padx=10)
         
+        ttk.Separator(parent, orient='horizontal').pack(fill=tk.X, pady=10)
+        
+        # 参考图集控制
+        tk.Label(parent, text="参考图集", font=("Arial", 12, "bold")).pack(pady=5)
+        
+        tk.Button(parent, text="选择参考图集", command=self.load_reference_atlas).pack(pady=5)
+        
+        self.reference_info_label = tk.Label(parent, text="未加载参考", fg='gray')
+        self.reference_info_label.pack(pady=2)
+        
+        # 参考精灵列表
+        ref_list_frame = tk.Frame(parent, height=150)
+        ref_list_frame.pack(fill=tk.X, pady=5)
+        ref_list_frame.pack_propagate(False)
+        
+        ref_scrollbar = Scrollbar(ref_list_frame)
+        ref_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.reference_listbox = tk.Listbox(ref_list_frame, yscrollcommand=ref_scrollbar.set, height=6)
+        self.reference_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        ref_scrollbar.config(command=self.reference_listbox.yview)
+        
+        self.reference_listbox.bind('<<ListboxSelect>>', self.on_reference_select)
+        
     def setup_center_panel(self, parent):
         """设置中央面板"""
         tk.Label(parent, text="图集预览", font=("Arial", 12, "bold")).pack()
@@ -168,11 +202,41 @@ class AnimationPreviewApp:
         
     def setup_right_panel(self, parent):
         """设置右侧面板"""
+        # 创建滚动框架容器
+        scroll_container = Frame(parent)
+        scroll_container.pack(fill="both", expand=True)
+        
+        # 创建画布和滚动条
+        canvas = Canvas(scroll_container, width=300)
+        scrollbar = Scrollbar(scroll_container, orient="vertical", command=canvas.yview)
+        scrollable_frame = Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # 先pack滚动条，再pack画布，确保滚动条可见
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        
+        # 绑定鼠标滚轮事件
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        
+        canvas.bind("<MouseWheel>", _on_mousewheel)  # Windows
+        canvas.bind("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))  # Linux
+        canvas.bind("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))   # Linux
+        
+        # 现在将所有控件添加到 scrollable_frame 而不是 parent
         # 动画预览区
-        tk.Label(parent, text="动画预览", font=("Arial", 12, "bold")).pack(pady=10)
+        tk.Label(scrollable_frame, text="动画预览", font=("Arial", 12, "bold")).pack(pady=10)
         
         # 预览画布
-        preview_frame = tk.Frame(parent, relief=tk.SUNKEN, bd=2, height=200)
+        preview_frame = tk.Frame(scrollable_frame, relief=tk.SUNKEN, bd=2, height=200)
         preview_frame.pack(fill=tk.X, pady=5)
         preview_frame.pack_propagate(False)
         
@@ -180,7 +244,7 @@ class AnimationPreviewApp:
         self.preview_canvas.pack(fill=tk.BOTH, expand=True)
         
         # 播放控制
-        control_frame = tk.Frame(parent)
+        control_frame = tk.Frame(scrollable_frame)
         control_frame.pack(fill=tk.X, pady=5)
         
         self.play_button = tk.Button(control_frame, text="▶ 播放", command=self.toggle_play)
@@ -189,7 +253,7 @@ class AnimationPreviewApp:
         tk.Button(control_frame, text="⟲ 重置", command=self.reset_animation).pack(side=tk.LEFT, padx=2)
         
         # 帧率控制
-        fps_frame = tk.Frame(parent)
+        fps_frame = tk.Frame(scrollable_frame)
         fps_frame.pack(fill=tk.X, pady=5)
         
         tk.Label(fps_frame, text="帧率:").pack(side=tk.LEFT)
@@ -200,16 +264,42 @@ class AnimationPreviewApp:
         tk.Label(fps_frame, text="FPS").pack(side=tk.LEFT)
         
         # 当前帧信息
-        self.frame_info_label = tk.Label(parent, text="帧: 0/0", fg='green')
+        self.frame_info_label = tk.Label(scrollable_frame, text="帧: 0/0", fg='green')
         self.frame_info_label.pack(pady=5)
         
-        ttk.Separator(parent, orient='horizontal').pack(fill=tk.X, pady=10)
+        ttk.Separator(scrollable_frame, orient='horizontal').pack(fill=tk.X, pady=10)
+        
+        # 缩放调节控制
+        tk.Label(scrollable_frame, text="动画缩放调节", font=("Arial", 12, "bold")).pack(pady=5)
+        
+        # 显示参考精灵选项
+        tk.Checkbutton(scrollable_frame, text="显示参考精灵", variable=self.show_reference).pack(anchor=tk.W, padx=10)
+        
+        # 缩放比例控制
+        scale_frame = tk.Frame(scrollable_frame)
+        scale_frame.pack(fill=tk.X, pady=5)
+        
+        tk.Label(scale_frame, text="缩放比例:").pack(side=tk.LEFT)
+        self.animation_scale_var = tk.DoubleVar(value=1.0)
+        animation_scale_slider = tk.Scale(scale_frame, from_=0.1, to=5.0, resolution=0.1,
+                                         orient=tk.HORIZONTAL, variable=self.animation_scale_var,
+                                         command=self.on_animation_scale_change)
+        animation_scale_slider.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        # 缩放信息显示
+        self.scale_info_label = tk.Label(scrollable_frame, text="当前缩放: 1.0x")
+        self.scale_info_label.pack(pady=2)
+        
+        # 重置缩放按钮
+        tk.Button(scrollable_frame, text="重置缩放", command=self.reset_animation_scale).pack(pady=5)
+        
+        ttk.Separator(scrollable_frame, orient='horizontal').pack(fill=tk.X, pady=10)
         
         # 动作组管理
-        tk.Label(parent, text="动作组管理", font=("Arial", 12, "bold")).pack(pady=5)
+        tk.Label(scrollable_frame, text="动作组管理", font=("Arial", 12, "bold")).pack(pady=5)
         
         # 添加动作组
-        add_frame = tk.Frame(parent)
+        add_frame = tk.Frame(scrollable_frame)
         add_frame.pack(fill=tk.X, pady=5)
         
         self.action_name_var = tk.StringVar()
@@ -217,30 +307,30 @@ class AnimationPreviewApp:
         tk.Button(add_frame, text="添加动作", command=self.add_action_group).pack(side=tk.LEFT, padx=5)
         
         # 动作组列表
-        list_frame = tk.Frame(parent, height=200)
+        list_frame = tk.Frame(scrollable_frame, height=200)
         list_frame.pack(fill=tk.BOTH, expand=True, pady=5)
         list_frame.pack_propagate(False)
         
-        scrollbar = Scrollbar(list_frame)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        action_scrollbar = Scrollbar(list_frame)
+        action_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        self.action_listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set)
+        self.action_listbox = tk.Listbox(list_frame, yscrollcommand=action_scrollbar.set)
         self.action_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.config(command=self.action_listbox.yview)
+        action_scrollbar.config(command=self.action_listbox.yview)
         
         self.action_listbox.bind('<<ListboxSelect>>', self.on_action_select)
         
         # 动作操作按钮
-        action_btn_frame = tk.Frame(parent)
+        action_btn_frame = tk.Frame(scrollable_frame)
         action_btn_frame.pack(fill=tk.X, pady=5)
         
         tk.Button(action_btn_frame, text="预览动作", command=self.preview_action).pack(side=tk.LEFT, padx=2)
         tk.Button(action_btn_frame, text="删除动作", command=self.delete_action).pack(side=tk.LEFT, padx=2)
         
-        ttk.Separator(parent, orient='horizontal').pack(fill=tk.X, pady=10)
+        ttk.Separator(scrollable_frame, orient='horizontal').pack(fill=tk.X, pady=10)
         
         # 导出按钮
-        tk.Button(parent, text="导出动画配置", command=self.export_animation_config,
+        tk.Button(scrollable_frame, text="导出动画配置", command=self.export_animation_config,
                  bg='#4CAF50', fg='white', padx=20, pady=5).pack(pady=10)
         
     def load_atlas_list(self):
@@ -483,10 +573,43 @@ class AnimationPreviewApp:
             self.root.after(10, self.animate)
     
     def show_preview_frame(self, index):
-        """显示预览帧"""
+        """显示预览帧（支持分层显示）"""
         if not self.selected_frames or index >= len(self.selected_frames):
             return
         
+        # 清空画布
+        self.preview_canvas.delete("all")
+        
+        # 获取画布尺寸
+        canvas_width = self.preview_canvas.winfo_width()
+        canvas_height = self.preview_canvas.winfo_height()
+        
+        # 基础放大倍数
+        base_preview_scale = 4
+        
+        # 1. 显示参考精灵（如果有）
+        if self.show_reference.get() and self.selected_reference_sprite:
+            ref_sprite = self.selected_reference_sprite
+            
+            # 参考精灵使用固定的放大倍数
+            ref_width = ref_sprite.width * base_preview_scale
+            ref_height = ref_sprite.height * base_preview_scale
+            ref_sprite_scaled = ref_sprite.resize((ref_width, ref_height), Image.NEAREST)
+            
+            # 半透明处理（可选）
+            ref_sprite_scaled = ref_sprite_scaled.convert('RGBA')
+            # ref_sprite_scaled.putalpha(128)  # 半透明
+            
+            self.reference_photo = ImageTk.PhotoImage(ref_sprite_scaled)
+            
+            # 居中显示参考精灵
+            ref_x = (canvas_width - ref_width) // 2
+            ref_y = (canvas_height - ref_height) // 2
+            
+            self.preview_canvas.create_image(ref_x, ref_y, anchor=tk.NW, 
+                                            image=self.reference_photo, tags="reference")
+        
+        # 2. 显示动画精灵（应用缩放）
         frame = self.selected_frames[index]
         
         # 从图集中裁剪精灵
@@ -496,23 +619,23 @@ class AnimationPreviewApp:
             frame.y + frame.height
         ))
         
-        # 放大显示
-        preview_scale = 4
-        preview_width = sprite.width * preview_scale
-        preview_height = sprite.height * preview_scale
-        sprite = sprite.resize((preview_width, preview_height), Image.NEAREST)
+        # 应用动画缩放
+        animation_preview_scale = base_preview_scale * self.animation_scale
+        preview_width = int(sprite.width * animation_preview_scale)
+        preview_height = int(sprite.height * animation_preview_scale)
         
-        # 显示在预览画布上
-        self.preview_photo = ImageTk.PhotoImage(sprite)
-        self.preview_canvas.delete("all")
-        
-        # 居中显示
-        canvas_width = self.preview_canvas.winfo_width()
-        canvas_height = self.preview_canvas.winfo_height()
-        x = (canvas_width - preview_width) // 2
-        y = (canvas_height - preview_height) // 2
-        
-        self.preview_canvas.create_image(x, y, anchor=tk.NW, image=self.preview_photo)
+        if preview_width > 0 and preview_height > 0:
+            sprite = sprite.resize((preview_width, preview_height), Image.NEAREST)
+            
+            # 显示在预览画布上
+            self.preview_photo = ImageTk.PhotoImage(sprite)
+            
+            # 居中显示动画精灵
+            x = (canvas_width - preview_width) // 2
+            y = (canvas_height - preview_height) // 2
+            
+            self.preview_canvas.create_image(x, y, anchor=tk.NW, 
+                                            image=self.preview_photo, tags="animation")
     
     def reset_animation(self):
         """重置动画"""
@@ -641,7 +764,8 @@ class AnimationPreviewApp:
             "sprite_info": {
                 "name": self.metadata.get('atlas_name', 'sprite'),
                 "width": sprite_width,
-                "height": sprite_height
+                "height": sprite_height,
+                "scale_ratio": self.animation_scale  # 添加缩放比例
             },
             "layout": {
                 "columns": max_col,
@@ -659,9 +783,8 @@ class AnimationPreviewApp:
                 "frame_count": action.frame_count
             }
         
-        # 保存到文件
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        filename = f"animation_config_{timestamp}.json"
+        # 保存到文件（移除时间戳）
+        filename = "animation_config.json"
         filepath = os.path.join(self.current_atlas_path, filename)
         
         with open(filepath, 'w', encoding='utf-8') as f:
@@ -670,7 +793,109 @@ class AnimationPreviewApp:
         messagebox.showinfo("导出成功", 
                           f"动画配置已导出\n"
                           f"文件: {filename}\n"
-                          f"包含 {len(self.action_groups)} 个动作组")
+                          f"包含 {len(self.action_groups)} 个动作组\n"
+                          f"缩放比例: {self.animation_scale:.1f}x")
+    
+    def load_reference_atlas(self):
+        """加载参考图集"""
+        file_path = filedialog.askopenfilename(
+            title="选择参考图集",
+            filetypes=[("图片文件", "*.png *.jpg *.jpeg"), ("所有文件", "*.*")]
+        )
+        
+        if not file_path:
+            return
+        
+        try:
+            # 加载图集图片
+            self.reference_atlas = Image.open(file_path)
+            
+            # 尝试加载对应的metadata
+            dir_path = os.path.dirname(file_path)
+            metadata_path = os.path.join(dir_path, 'metadata.json')
+            
+            if os.path.exists(metadata_path):
+                with open(metadata_path, 'r', encoding='utf-8') as f:
+                    self.reference_metadata = json.load(f)
+                    
+                # 解析精灵列表
+                self.reference_sprites = self.reference_metadata.get('sprites', [])
+                
+                # 更新列表框
+                self.reference_listbox.delete(0, tk.END)
+                for i, sprite in enumerate(self.reference_sprites):
+                    name = sprite.get('name', f'sprite_{i}')
+                    self.reference_listbox.insert(tk.END, name)
+                
+                # 更新信息标签
+                atlas_name = self.reference_metadata.get('atlas_name', '未知')
+                sprite_count = len(self.reference_sprites)
+                self.reference_info_label.config(
+                    text=f"参考: {atlas_name} ({sprite_count}个精灵)",
+                    fg='blue'
+                )
+            else:
+                # 没有metadata，作为单张图片处理
+                self.reference_metadata = None
+                self.reference_sprites = []
+                self.reference_listbox.delete(0, tk.END)
+                self.reference_listbox.insert(tk.END, "完整图片")
+                
+                self.reference_info_label.config(
+                    text=f"参考图片已加载",
+                    fg='blue'
+                )
+                
+        except Exception as e:
+            messagebox.showerror("错误", f"无法加载参考图集: {str(e)}")
+    
+    def on_reference_select(self, event):
+        """选择参考精灵"""
+        selection = self.reference_listbox.curselection()
+        if not selection or not self.reference_atlas:
+            return
+        
+        index = selection[0]
+        
+        if self.reference_sprites and index < len(self.reference_sprites):
+            # 从metadata中获取精灵信息
+            sprite_info = self.reference_sprites[index]
+            frame = sprite_info.get('frame')
+            if frame:
+                # 裁剪精灵
+                self.selected_reference_sprite = self.reference_atlas.crop((
+                    frame['x'], frame['y'],
+                    frame['x'] + frame['width'],
+                    frame['y'] + frame['height']
+                ))
+            else:
+                self.selected_reference_sprite = self.reference_atlas
+        else:
+            # 使用完整图片
+            self.selected_reference_sprite = self.reference_atlas
+        
+        # 刷新预览
+        if self.selected_frames:
+            self.show_preview_frame(self.current_frame_index)
+    
+    def on_animation_scale_change(self, value):
+        """动画缩放变化"""
+        self.animation_scale = float(value)
+        self.scale_info_label.config(text=f"当前缩放: {self.animation_scale:.1f}x")
+        
+        # 刷新预览
+        if self.selected_frames:
+            self.show_preview_frame(self.current_frame_index)
+    
+    def reset_animation_scale(self):
+        """重置动画缩放"""
+        self.animation_scale = 1.0
+        self.animation_scale_var.set(1.0)
+        self.scale_info_label.config(text="当前缩放: 1.0x")
+        
+        # 刷新预览
+        if self.selected_frames:
+            self.show_preview_frame(self.current_frame_index)
 
 
 def main():
